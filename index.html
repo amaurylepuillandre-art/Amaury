@@ -1578,6 +1578,17 @@
           <p class="text-[10px] text-white/45">Colle ici l’URL de ton service Render. Elle sera mémorisée sur cet appareil.</p>
         </div>
         <div id="lobbyConnectStatus" class="text-xs text-amber-300" role="status">Serveur non configuré.</div>
+        <!-- CHOIX DU MODE DE COMBAT MULTI -->
+        <div id="lobbyModeSection" class="rounded-xl bg-slate-950/50 border border-white/10 p-3 space-y-2">
+          <label class="text-xs text-white/70 font-bold block">MODE DE COMBAT MULTI</label>
+          <div class="grid grid-cols-2 gap-2">
+            <button type="button" data-mpmode="territory" class="mp-mode-btn rounded-lg bg-cyan-600 px-3 py-2 text-xs font-bold text-white text-center border border-cyan-300/40 transition">Territoire (1v1 / FFA)</button>
+            <button type="button" data-mpmode="battleroyale" class="mp-mode-btn rounded-lg bg-slate-900 hover:bg-slate-800 px-3 py-2 text-xs font-bold text-white/80 text-center border border-white/10 transition">Battle Royale</button>
+            <button type="button" data-mpmode="kills3v3" class="mp-mode-btn rounded-lg bg-slate-900 hover:bg-slate-800 px-3 py-2 text-xs font-bold text-white/80 text-center border border-white/10 transition">3v3 Éliminations</button>
+            <button type="button" data-mpmode="hotzone" class="mp-mode-btn rounded-lg bg-slate-900 hover:bg-slate-800 px-3 py-2 text-xs font-bold text-white/80 text-center border border-white/10 transition">Zone Chaude</button>
+          </div>
+          <p class="text-[10px] text-white/45">Le chef du salon choisit le mode de jeu pour tous les participants.</p>
+        </div>
         <div id="lobbyActions" class="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <div class="space-y-2"><label class="text-xs font-bold text-white/70">CODE DU LOBBY</label><input id="lobbyCodeInput" maxlength="6" placeholder="Ex. GP4821" class="w-full rounded-xl bg-slate-950 border border-white/15 px-4 py-3 text-center text-xl tracking-[.25em] font-black text-white uppercase"><button id="confirmJoinLobby" type="button" class="w-full rounded-xl bg-cyan-600 hover:bg-cyan-500 py-3 text-sm font-black text-white">REJOINDRE</button></div>
           <div class="rounded-xl bg-slate-950/40 border border-white/10 p-3 flex flex-col justify-between gap-2"><div><div class="text-xs font-bold text-white">CRÉER UNE SALLE</div><p class="text-[11px] text-white/55">Jusqu’à 8 joueurs, toi compris.</p></div><button id="confirmCreateLobby" type="button" class="rounded-xl bg-orange-600 hover:bg-orange-500 py-3 text-sm font-black text-white">CRÉER UN LOBBY</button></div>
@@ -10172,7 +10183,45 @@
     socket.on('lobby:update',renderRoom);
     socket.on('lobby:error',p=>status(p.message||'Erreur de lobby.','error'));
     socket.on('lobby:notice',p=>{if(p&&p.message)status(p.message);});
-    socket.on('lobby:started',p=>{status('Lobby validé : tous les pilotes sont prêts.','ok');$('lobbyRoomHint').textContent='Salon '+(p.code||currentRoom)+' validé. Le combat synchronisé n’est pas encore activé dans cette version.';});
+    
+  let currentMpMode = 'territory';
+  document.querySelectorAll('.mp-mode-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      if (!isHost) {
+        status('Seul le chef du salon peut changer le mode de jeu.', 'error');
+        return;
+      }
+      const mode = btn.dataset.mpmode;
+      if (socket && currentRoom) {
+        socket.emit('lobby:setMode', { mode });
+      }
+    });
+  });
+
+  socket.on('lobby:modeUpdate', p => {
+    if (p && p.mode) {
+      currentMpMode = p.mode;
+      state.gameMode = currentMpMode;
+      document.querySelectorAll('.mp-mode-btn').forEach(b => {
+        const active = b.dataset.mpmode === currentMpMode;
+        b.className = active 
+          ? 'mp-mode-btn rounded-lg bg-cyan-600 px-3 py-2 text-xs font-bold text-white text-center border border-cyan-300/40 transition'
+          : 'mp-mode-btn rounded-lg bg-slate-900 hover:bg-slate-800 px-3 py-2 text-xs font-bold text-white/80 text-center border border-white/10 transition';
+      });
+      status('Mode de jeu défini sur : ' + currentMpMode.toUpperCase(), 'ok');
+    }
+  });
+
+  socket.on('lobby:started', p => {
+    status('Lancement de la partie multijoueur !', 'ok');
+    modal.classList.add('hidden');
+    state.campaignActive = false;
+    state.customMode = false;
+    state.gameMode = currentMpMode;
+    state.numTeams = currentMpMode === 'kills3v3' ? 3 : 2;
+    startGame();
+  });
+
     return true;
   }
   function myName(){const el=$('playerNameInput');return ((el&&el.value)||'Pilote').trim().slice(0,16)||'Pilote';}
