@@ -1,114 +1,98 @@
-const express = require('express');
 const http = require('http');
-const { Server } = require('socket.io');
+const { WebSocketServer, WebSocket } = require('ws');
+const crypto = require('crypto');
 
-const app = express();
-const server = http.createServer(app);
-const io = new Server(server);
+const PORT = process.env.PORT || 10000;
+const MAX_PLAYERS = 8;
+const rooms = new Map();
+const clients = new Map();
 
-app.use(express.static('public'));
-
-let players = {};
-let bullets = [];
-const mapObstacles = [
-    { x: 200, y: 150, w: 100, h: 40 },
-    { x: 600, y: 150, w: 100, h: 40 },
-    { x: 400, y: 300, w: 100, h: 100 },
-    { x: 200, y: 450, w: 100, h: 40 },
-    { x: 600, y: 450, w: 100, h: 40 }
-];
-
-io.on('connection', (socket) => {
-    console.log(`Joueur connecté : ${socket.id}`);
-
-    players[socket.id] = {
-        x: Math.random() * 700 + 100,
-        y: Math.random() * 400 + 100,
-        angle: 0,
-        hp: 100,
-        maxHp: 100,
-        score: 0,
-        color: '#' + Math.floor(Math.random()*16777215).toString(16)
-    };
-
-    socket.on('playerMovement', (data) => {
-        if (players[socket.id]) {
-            players[socket.id].x = data.x;
-            players[socket.id].y = data.y;
-            players[socket.id].angle = data.angle;
-        }
-    });
-
-    socket.on('playerShoot', (data) => {
-        bullets.push({
-            id: Math.random().toString(),
-            playerId: socket.id,
-            x: data.x,
-            y: data.y,
-            angle: data.angle,
-            speed: 8
-        });
-    });
-
-    socket.on('disconnect', () => {
-        console.log(`Joueur déconnecté : ${socket.id}`);
-        delete players[socket.id];
-    });
-});
-
-// Boucle principale du serveur (tick rate à ~60 FPS)
-setInterval(() => {
-    // Mettre à jour les projectiles
-    for (let i = bullets.length - 1; i >= 0; i--) {
-        let b = bullets[i];
-        b.x += Math.cos(b.angle) * b.speed;
-        b.y += Math.sin(b.angle) * b.speed;
-
-        // Suppression si hors limites de la map (900x600)
-        if (b.x < 0 || b.x > 900 || b.y < 0 || b.y > 600) {
-            bullets.splice(i, 1);
-            continue;
-        }
-
-        // Collision avec les obstacles de la map
-        let hitObs = mapObstacles.some(obs => 
-            b.x > obs.x && b.x < obs.x + obs.w && b.y > obs.y && b.y < obs.y + obs.h
-        );
-        if (hitObs) {
-            bullets.splice(i, 1);
-            continue;
-        }
-
-        // Collision avec les joueurs (Dégâts)
-        for (let id in players) {
-            if (id !== b.playerId) {
-                let p = players[id];
-                let dist = Math.hypot(p.x - b.x, p.y - b.y);
-                if (dist < 20) {
-                    // Touché !
-                    p.hp -= 20;
-                    bullets.splice(i, 1);
-
-                    if (p.hp <= 0) {
-                        // Réapparition et score
-                        p.hp = p.maxHp;
-                        p.x = Math.random() * 700 + 100;
-                        p.y = Math.random() * 400 + 100;
-                        if (players[b.playerId]) {
-                            players[b.playerId].score += 1;
-                        }
-                    }
-                    break;
-                }
-            }
-        }
+function code() {
+  const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  let out = '';
+  do { out = Array.from({length:5},()=>alphabet[crypto.randomInt(alphabet.length)]).join(''); }
+  while (rooms.has(out));
+  return out;
+}
+function send(ws, data) {
+  if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(data));
+}
+function roomInfo(room) {
+  return {
+    code: room.code, hostId: room.hostId, state: room.state,
+    mode: room.mode, maxPlayers: MAX_PLAYERS,
+    players: [...room.players.values()].map(p => ({id:p.id,name:p.name,host:p.id===room.hostId})),
+    botCount: room.state === 'playing' ? Math.max(0, MAX_PLAYERS-room.players.size) : 0
+  };
+}
+function broadcast(room, data) {
+  for (const p of room.players.values()) send(p.ws, data);
+}
+function publish(room) { broadcast(room, {t:'lobby_update', room:roomInfo(room)}); }
+function leave(ws) {
+  const info = clients.get(ws); if (!info) return;
+  clients.delete(ws);
+  const room = rooms.get(info.code); if (!room) return;
+  room.players.delete(info.id);
+  if (!room.players.size) rooms.delete(info.code);
+  else {
+    if (room.hostId === info.id) {
+      room.hostId = room.players.keys().next().value;
+      room.players.get(room.hostId).host = true;
     }
-
-    // Envoyer l'état global à tous les clients
-    io.emit('gameState', { players, bullets });
-}, 1000 / 60);
-
-const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => {
-    console.log(`Serveur de jeu actif sur le port ${PORT}`);
+    publish(room);
+  }
+}
+const server = http.createServer((req,res) => {
+  if (req.url === '/health') { res.writeHead(200,{'content-type':'application/json'}); return res.end(JSON.stringify({ok:true,rooms:rooms.size})); }
+  res.writeHead(200,{'content-type':'text/plain'}); res.end('GridPulse lobby server is online');
 });
+const wss = new WebSocketServer({server, path:'/ws'});
+wss.on('connection', ws => {
+  ws.on('message', raw => {
+    let m; try { m = JSON.parse(raw.toString()); } catch { return send(ws,{t:'error',message:'Message invalide'}); }
+    if (m.t === 'create') {
+      const id = crypto.randomUUID(), roomCode = code();
+      const room = {code:roomCode,hostId:id,state:'waiting',mode:['territory','battleroyale','teambrawl'].includes(m.mode)?m.mode:'territory',players:new Map()};
+      room.players.set(id,{id,name:String(m.name||'Hôte').replace(/[<>]/g,'').slice(0,16),ws,host:true});
+      rooms.set(roomCode,room); clients.set(ws,{code:roomCode,id});
+      send(ws,{t:'created',id,room:roomInfo(room)}); publish(room); return;
+    }
+    if (m.t === 'join') {
+      const room = rooms.get(String(m.code||'').toUpperCase());
+      if (!room) return send(ws,{t:'error',message:'Salon introuvable'});
+      if (room.state !== 'waiting') return send(ws,{t:'error',message:'La partie a déjà commencé'});
+      if (room.players.size >= MAX_PLAYERS) return send(ws,{t:'error',message:'Salon complet (8 joueurs maximum)'});
+      const id = crypto.randomUUID();
+      room.players.set(id,{id,name:String(m.name||'Pilote').replace(/[<>]/g,'').slice(0,16),ws,host:false});
+      clients.set(ws,{code:room.code,id});
+      send(ws,{t:'joined',id,room:roomInfo(room)}); publish(room); return;
+    }
+    const info = clients.get(ws); if (!info) return send(ws,{t:'error',message:'Rejoins un salon avant cette action'});
+    const room = rooms.get(info.code); if (!room) return;
+    if (m.t === 'start') {
+      if (info.id !== room.hostId) return send(ws,{t:'error',message:'Seul l’hôte peut lancer la partie'});
+      if (room.state !== 'waiting') return;
+      room.state = 'playing';
+      room.botCount = Math.max(0, MAX_PLAYERS-room.players.size);
+      const start = {t:'game_start',room:roomInfo(room),humanCount:room.players.size,botCount:room.botCount,mode:room.mode};
+      broadcast(room,start); publish(room); return;
+    }
+    // Relais pour le futur moteur de combat autoritaire : input -> hôte, état -> tous les clients.
+    if (m.t === 'game_input') {
+      if (room.state !== 'playing') return;
+      const host = room.players.get(room.hostId);
+      if (host && info.id !== room.hostId) send(host.ws,{t:'player_input',playerId:info.id,input:m.input});
+      return;
+    }
+    if (m.t === 'game_state') {
+      if (info.id !== room.hostId || room.state !== 'playing') return;
+      for (const p of room.players.values()) if (p.id !== room.hostId) send(p.ws,{t:'game_state',state:m.state});
+      return;
+    }
+    if (m.t === 'leave') { leave(ws); return; }
+  });
+  ws.on('close',()=>leave(ws));
+  ws.on('error',()=>leave(ws));
+});
+server.listen(PORT,'0.0.0.0',()=>console.log(`GridPulse server listening on ${PORT}`));

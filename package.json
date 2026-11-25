@@ -1,13 +1,11 @@
 {
-  "name": "gridpulse-multiplayer-complet",
-  "version": "2.0.0",
-  "description": "Gridpulse Conquest avec mouvements, tirs, dégâts et map multijoueur",
-  "main": "server.js",
+  "name": "gridpulse-lobby-server",
+  "version": "1.0.0",
+  "private": true,
   "scripts": {
     "start": "node server.js"
   },
   "dependencies": {
-    "express": "^4.19.2",
-    "socket.io": "^4.7.5"
+    "ws": "^8.18.0"
   }
 }
