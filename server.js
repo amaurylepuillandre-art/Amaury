@@ -4,160 +4,111 @@ const { Server } = require('socket.io');
 
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server, {
-  cors: {
-    origin: '*',
-    methods: ['GET', 'POST']
-  }
-});
+const io = new Server(server);
 
-const PORT = process.env.PORT || 3000;
-const MAX_PLAYERS = 8;
-const rooms = new Map();
+app.use(express.static('public'));
 
-function generateCode() {
-  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-  let code = '';
-  do {
-    code = '';
-    for (let i = 0; i < 6; i++) {
-      code += chars[Math.floor(Math.random() * chars.length)];
-    }
-  } while (rooms.has(code));
-  return code;
-}
-
-function serializeRoom(room) {
-  return {
-    code: room.code,
-    hostId: room.hostId,
-    started: room.started,
-    players: room.players.map(p => ({
-      id: p.id,
-      name: p.name,
-      ready: p.ready
-    }))
-  };
-}
-
-function removePlayerFromRoom(socket) {
-  const code = socket.data.roomCode;
-  if (!code) return;
-  const room = rooms.get(code);
-  socket.leave(code);
-  socket.data.roomCode = null;
-  if (!room) return;
-
-  const idx = room.players.findIndex(p => p.id === socket.id);
-  if (idx !== -1) {
-    const [removed] = room.players.splice(idx, 1);
-    if (room.players.length === 0) {
-      rooms.delete(code);
-      return;
-    }
-    if (room.hostId === socket.id) {
-      room.hostId = room.players[0].id;
-      room.players[0].ready = true;
-    }
-    io.to(code).emit('lobby:update', serializeRoom(room));
-    io.to(code).emit('lobby:notice', { message: `${removed.name} a quitté le lobby.` });
-  }
-}
-
-app.get('/', (req, res) => {
-  res.json({ status: 'ok', service: 'GridPulse Conquest Lobby Server', rooms: rooms.size });
-});
-
-app.get('/health', (req, res) => {
-  res.send('OK');
-});
+let players = {};
+let bullets = [];
+const mapObstacles = [
+    { x: 200, y: 150, w: 100, h: 40 },
+    { x: 600, y: 150, w: 100, h: 40 },
+    { x: 400, y: 300, w: 100, h: 100 },
+    { x: 200, y: 450, w: 100, h: 40 },
+    { x: 600, y: 450, w: 100, h: 40 }
+];
 
 io.on('connection', (socket) => {
-  socket.on('lobby:create', (payload, cb) => {
-    removePlayerFromRoom(socket);
-    const name = String((payload && payload.name) || 'Pilote').trim().slice(0, 16) || 'Pilote';
-    const code = generateCode();
-    const room = {
-      code,
-      hostId: socket.id,
-      started: false,
-      players: [{ id: socket.id, name, ready: true }]
+    console.log(`Joueur connecté : ${socket.id}`);
+
+    players[socket.id] = {
+        x: Math.random() * 700 + 100,
+        y: Math.random() * 400 + 100,
+        angle: 0,
+        hp: 100,
+        maxHp: 100,
+        score: 0,
+        color: '#' + Math.floor(Math.random()*16777215).toString(16)
     };
-    rooms.set(code, room);
-    socket.join(code);
-    socket.data.roomCode = code;
-    if (typeof cb === 'function') cb({ ok: true, room: serializeRoom(room) });
-  });
 
-  socket.on('lobby:join', (payload, cb) => {
-    const code = String((payload && payload.code) || '').trim().toUpperCase();
-    const name = String((payload && payload.name) || 'Pilote').trim().slice(0, 16) || 'Pilote';
-    const room = rooms.get(code);
+    socket.on('playerMovement', (data) => {
+        if (players[socket.id]) {
+            players[socket.id].x = data.x;
+            players[socket.id].y = data.y;
+            players[socket.id].angle = data.angle;
+        }
+    });
 
-    if (!room) {
-      if (typeof cb === 'function') cb({ ok: false, message: 'Salon introuvable.' });
-      return;
-    }
-    if (room.started) {
-      if (typeof cb === 'function') cb({ ok: false, message: 'La partie a déjà démarré.' });
-      return;
-    }
-    if (room.players.length >= MAX_PLAYERS) {
-      if (typeof cb === 'function') cb({ ok: false, message: 'Salon complet (8/8).' });
-      return;
-    }
+    socket.on('playerShoot', (data) => {
+        bullets.push({
+            id: Math.random().toString(),
+            playerId: socket.id,
+            x: data.x,
+            y: data.y,
+            angle: data.angle,
+            speed: 8
+        });
+    });
 
-    removePlayerFromRoom(socket);
-    room.players.push({ id: socket.id, name, ready: false });
-    socket.join(code);
-    socket.data.roomCode = code;
-
-    const serialized = serializeRoom(room);
-    if (typeof cb === 'function') cb({ ok: true, room: serialized });
-    socket.to(code).emit('lobby:update', serialized);
-    socket.to(code).emit('lobby:notice', { message: `${name} a rejoint le lobby.` });
-  });
-
-  socket.on('lobby:ready', (payload) => {
-    const code = socket.data.roomCode;
-    const room = code && rooms.get(code);
-    if (!room) return;
-    const player = room.players.find(p => p.id === socket.id);
-    if (!player) return;
-    player.ready = Boolean(payload && payload.ready);
-    io.to(code).emit('lobby:update', serializeRoom(room));
-  });
-
-  socket.on('lobby:start', (payload, cb) => {
-    const code = socket.data.roomCode;
-    const room = code && rooms.get(code);
-    if (!room) {
-      if (typeof cb === 'function') cb({ ok: false, message: 'Salon introuvable.' });
-      return;
-    }
-    if (room.hostId !== socket.id) {
-      if (typeof cb === 'function') cb({ ok: false, message: 'Seul le chef du salon peut lancer.' });
-      return;
-    }
-    const allReady = room.players.every(p => p.ready);
-    if (!allReady) {
-      if (typeof cb === 'function') cb({ ok: false, message: 'Tous les joueurs doivent être prêts.' });
-      return;
-    }
-    room.started = true;
-    if (typeof cb === 'function') cb({ ok: true });
-    io.to(code).emit('lobby:started', { code: room.code });
-  });
-
-  socket.on('lobby:leave', () => {
-    removePlayerFromRoom(socket);
-  });
-
-  socket.on('disconnect', () => {
-    removePlayerFromRoom(socket);
-  });
+    socket.on('disconnect', () => {
+        console.log(`Joueur déconnecté : ${socket.id}`);
+        delete players[socket.id];
+    });
 });
 
+// Boucle principale du serveur (tick rate à ~60 FPS)
+setInterval(() => {
+    // Mettre à jour les projectiles
+    for (let i = bullets.length - 1; i >= 0; i--) {
+        let b = bullets[i];
+        b.x += Math.cos(b.angle) * b.speed;
+        b.y += Math.sin(b.angle) * b.speed;
+
+        // Suppression si hors limites de la map (900x600)
+        if (b.x < 0 || b.x > 900 || b.y < 0 || b.y > 600) {
+            bullets.splice(i, 1);
+            continue;
+        }
+
+        // Collision avec les obstacles de la map
+        let hitObs = mapObstacles.some(obs => 
+            b.x > obs.x && b.x < obs.x + obs.w && b.y > obs.y && b.y < obs.y + obs.h
+        );
+        if (hitObs) {
+            bullets.splice(i, 1);
+            continue;
+        }
+
+        // Collision avec les joueurs (Dégâts)
+        for (let id in players) {
+            if (id !== b.playerId) {
+                let p = players[id];
+                let dist = Math.hypot(p.x - b.x, p.y - b.y);
+                if (dist < 20) {
+                    // Touché !
+                    p.hp -= 20;
+                    bullets.splice(i, 1);
+
+                    if (p.hp <= 0) {
+                        // Réapparition et score
+                        p.hp = p.maxHp;
+                        p.x = Math.random() * 700 + 100;
+                        p.y = Math.random() * 400 + 100;
+                        if (players[b.playerId]) {
+                            players[b.playerId].score += 1;
+                        }
+                    }
+                    break;
+                }
+            }
+        }
+    }
+
+    // Envoyer l'état global à tous les clients
+    io.emit('gameState', { players, bullets });
+}, 1000 / 60);
+
+const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
-  console.log(`GridPulse multiplayer server listening on port ${PORT}`);
+    console.log(`Serveur de jeu actif sur le port ${PORT}`);
 });

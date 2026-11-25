@@ -1,15 +1,22 @@
-# GridPulse Conquest — Client & Serveur Multijoueur
+# GRIDPULSE CONQUEST - Multijoueur Complet (Mouvements, Dégâts, Map)
 
-Ce pack contient :
-- `index.html` : le jeu client (avec le module de lobby Socket.IO intégré)
-- `server/server.js` : le serveur Node.js + Socket.IO prêt pour Render
-- `server/package.json` : les dépendances (`express` et `socket.io`)
+## Fonctionnalités intégrées :
+- **Mouvements fluides** avec ZQSD ou les flèches du clavier.
+- **Visée à la souris** en temps réel.
+- **Système de tirs** (Barre ESPACE) géré par le serveur.
+- **Gestion des dégâts et des collisions** :
+  - Obstacles de la map (murs et blocs tactiques).
+  - Barres de vie dynamiques au-dessus des vaisseaux.
+  - Réapparition automatique et système de score en cas de destruction.
 
-## Déployer le serveur sur Render
-1. Mets le contenu du dossier `server/` (ou tout le dépôt) sur GitHub.
-2. Sur **Render**, crée un **Web Service** relié à ton dépôt.
-3. Configure :
-   - **Root Directory** : `server` (si tu pousses tout le dossier)
-   - **Build Command** : `npm install`
-   - **Start Command** : `npm start`
-4. Une fois déployé, copie l'URL HTTPS fournie par Render (ex. `https://gridpulse-server.onrender.com`) et colle-la dans le jeu via **Créer / Rejoindre un lobby**.
+## Lancement :
+1. Installer Node.js.
+2. Ouvrir un terminal dans le dossier et installer les modules :
+   ```bash
+   npm install
+   ```
+3. Lancer le serveur :
+   ```bash
+   npm start
+   ```
+4. Ouvrir `http://localhost:3000` dans plusieurs onglets pour jouer ensemble !

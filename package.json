@@ -1,16 +1,13 @@
 {
-  "name": "gridpulse-conquest-server",
-  "version": "1.0.0",
-  "description": "Serveur multijoueur Socket.IO pour GridPulse Conquest (Render)",
+  "name": "gridpulse-multiplayer-complet",
+  "version": "2.0.0",
+  "description": "Gridpulse Conquest avec mouvements, tirs, dégâts et map multijoueur",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
   },
   "dependencies": {
-    "express": "^4.21.2",
-    "socket.io": "^4.8.1"
-  },
-  "engines": {
-    "node": ">=18.0.0"
+    "express": "^4.19.2",
+    "socket.io": "^4.7.5"
   }
 }
