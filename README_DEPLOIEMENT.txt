@@ -17,8 +17,7 @@ DÉPLOIEMENT RENDER
 
 CONFIGURATION DU JEU
 Dans le HTML, cherche :
-const GRIDPULSE_LOBBY_SERVER = 'wss://TON-SERVEUR.onrender.com/ws';
-Remplace TON-SERVEUR par le nom exact fourni par Render.
+Le HTML est déjà configuré sur wss://amaury-2pvx.onrender.com/ws.
 Pour tester le serveur : https://nom-du-service.onrender.com/health
 
 FONCTIONS DU SERVEUR
@@ -31,3 +30,13 @@ FONCTIONS DU SERVEUR
 
 LIMITATION IMPORTANTE
 Ce pack met en place le serveur de salons et son protocole de relais, mais le moteur de combat HTML d'origine est encore construit autour d'un seul adversaire distant WebRTC. Il faut adapter le moteur de simulation pour consommer player_input et game_state pour que les 8 humains jouent réellement ensemble dans la même simulation. Le démarrage du salon et le remplissage logique des places par bots ne doivent pas être confondus avec cette synchronisation en combat : elle n'est pas encore finalisée dans cette version.
+
+
+RÈGLES DE LANCEMENT PAR MODE (mise à jour)
+- 1v1 / Assaut : 2 combattants au total, le salon accepte jusqu'à 2 humains ; les places restantes sont des bots.
+- Battle Royale : 8 combattants au total ; le serveur calcule les bots nécessaires (8 - humains).
+- Team Brawl : 3 équipes de 3 combattants (9 unités au total), jusqu'à 8 humains et les places restantes en bots.
+- Tous les clients reçoivent le même mode sélectionné dans le salon et lancent le moteur avec les règles solo correspondantes.
+
+LIMITE TECHNIQUE À CONNAÎTRE
+Le moteur de combat existant ne synchronise pas encore la simulation complète de plusieurs joueurs humains via le nouveau serveur WebSocket. Cette mise à jour synchronise le mode et le lancement et calcule les bots de remplissage côté serveur, mais les autres humains ne sont pas encore pilotés comme des unités réseau dans l'arène. Chaque client démarre pour l'instant sa simulation locale avec les bots du mode choisi.

@@ -1864,7 +1864,7 @@ button:not(:disabled){transition:filter .18s ease,transform .18s ease,box-shadow
                     <div class="text-xs font-display font-black uppercase tracking-wider text-white/85">Choisis ton mode multijoueur</div>
                     <div class="grid grid-cols-1 sm:grid-cols-3 gap-2">
                         <button type="button" data-net-mode="territory" class="net-mode-btn rounded-xl border-2 border-cyan-300 bg-cyan-500/20 p-3 text-left transition">
-                            <div class="font-display font-black text-sm text-white">1v1</div><div class="text-[10px] text-white/65 mt-1">Duel et destruction de base</div>
+                            <div class="font-display font-black text-sm text-white">1v1</div><div class="text-[10px] text-white/65 mt-1">1 joueur contre 1 adversaire</div>
                         </button>
                         <button type="button" data-net-mode="battleroyale" class="net-mode-btn rounded-xl border-2 border-white/10 bg-slate-900/60 p-3 text-left transition">
                             <div class="font-display font-black text-sm text-white">Battle Royale</div><div class="text-[10px] text-white/65 mt-1">Dernier survivant, zone et coffres</div>
@@ -1903,7 +1903,7 @@ button:not(:disabled){transition:filter .18s ease,transform .18s ease,box-shadow
           <button id="netClose" type="button" class="rounded-xl px-3 py-2 bg-white/10 text-white">✕</button>
         </div>
         <p class="text-xs text-white/60">Crée un salon ou rejoins un salon avec son code. Jusqu’à 8 joueurs, puis bots de remplissage.</p>
-        <div id="netSteps" class="hidden space-y-3">
+        <div id="netSteps" class="hidden space-y-3" aria-hidden="true">
           <div id="netOutBlock" class="space-y-2">
             <p id="netOutLabel" class="text-xs font-bold text-white"></p>
             <textarea id="netOut" readonly rows="3" class="w-full rounded-lg bg-slate-900 border border-white/15 p-2 text-[10px] text-white break-all" style="user-select:text;-webkit-user-select:text"></textarea>
@@ -1917,19 +1917,23 @@ button:not(:disabled){transition:filter .18s ease,transform .18s ease,box-shadow
         </div>
         <div id="onlineLobbyPanel" class="space-y-3">
           <div class="flex gap-2">
-            <input id="onlineRoomCode" maxlength="5" placeholder="CODE SALON" class="min-w-0 flex-1 rounded-lg bg-slate-900 border border-white/20 px-3 py-3 text-center font-black tracking-[.25em] text-white uppercase"/>
+            <input id="onlineRoomCode" maxlength="5" inputmode="text" autocomplete="off" placeholder="CODE SALON"
+              class="min-w-0 flex-1 rounded-xl bg-slate-950 border-2 border-cyan-300/40 px-3 py-3 text-center font-black tracking-[.25em] text-white uppercase outline-none focus:border-cyan-300"/>
             <button id="onlineJoin" type="button" class="rounded-xl bg-cyan-600 px-4 text-xs font-black text-white">REJOINDRE</button>
           </div>
-          <div id="onlineRoomInfo" class="hidden rounded-xl border border-cyan-400/25 bg-slate-950/60 p-3 space-y-2">
-            <div class="flex justify-between items-center"><span class="text-xs text-white/60">CODE DU SALON</span><strong id="onlineRoomCodeLabel" class="text-lg tracking-[.2em] text-amber-300"></strong></div>
-            <div id="onlinePlayers" class="space-y-1 text-xs text-white"></div>
-            <div id="onlineBotFill" class="text-xs text-emerald-300"></div>
+          <div id="onlineRoomInfo" class="hidden rounded-2xl border border-cyan-400/30 bg-slate-950/70 p-3 space-y-3">
+            <div class="flex justify-between items-center gap-2">
+              <span class="text-xs font-bold text-white/60">CODE DU SALON</span>
+              <strong id="onlineRoomCodeLabel" class="text-xl tracking-[.22em] text-amber-300 text-center flex-1 block"></strong>
+            </div>
+            <div id="onlinePlayers" class="grid grid-cols-4 gap-2" aria-label="Places du salon, 8 joueurs maximum"></div>
+            <div id="onlineBotFill" class="text-center text-xs font-bold text-emerald-300"></div>
           </div>
           <button id="onlineCreate" type="button" class="w-full rounded-xl bg-orange-500 py-3 text-xs font-black text-white">CRÉER UN SALON</button>
           <button id="onlineStart" type="button" class="hidden w-full rounded-xl bg-emerald-600 py-3 text-sm font-black text-white">LANCER · COMPLÉTER AVEC DES BOTS</button>
         </div>
         <p id="netStatus" class="text-xs text-amber-300" role="status"></p>
-        <button id="netStart" type="button" class="hidden w-full rounded-xl bg-emerald-600 py-3 text-sm font-black text-white">LANCER LA PARTIE</button>
+        <button id="netStart" type="button" class="hidden" aria-hidden="true">LANCER LA PARTIE</button>
       </div>
     </div>
     <div id="netEnd" class="hidden fixed inset-0 z-[90] bg-slate-950/85 p-4 flex items-center justify-center pointer-events-auto">
@@ -10895,8 +10899,16 @@ button:not(:disabled){transition:filter .18s ease,transform .18s ease,box-shadow
                     b.classList.toggle('bg-slate-900/60', !active);
                 });
             }));
-            $n('createLobbyBtn').addEventListener('click', () => { open(); netCreateHost(); });
-            $n('joinLobbyBtn').addEventListener('click', () => { open(); netPrepareJoin(); });
+            $n('createLobbyBtn').addEventListener('click', () => {
+                open();
+                $n('netSteps').classList.add('hidden');
+                window.gridPulseOnlineCreate && window.gridPulseOnlineCreate();
+            });
+            $n('joinLobbyBtn').addEventListener('click', () => {
+                open();
+                $n('netSteps').classList.add('hidden');
+                setTimeout(() => $n('onlineRoomCode').focus(), 80);
+            });
             $n('netClose').addEventListener('click', () => location.reload());
             $n('netApply').addEventListener('click', netApplyCode);
             $n('netStart').addEventListener('click', netStartHost);
@@ -10974,31 +10986,47 @@ button:not(:disabled){transition:filter .18s ease,transform .18s ease,box-shadow
 <script>
 (() => {
   // Remplacer par l'URL WebSocket du service Render.
-  const GRIDPULSE_LOBBY_SERVER = 'wss://TON-SERVEUR.onrender.com/ws';
+  const GRIDPULSE_LOBBY_SERVER = 'wss://amaury-2pvx.onrender.com/ws';
   const $ = id => document.getElementById(id);
   let socket = null, room = null, playerId = null, selectedMode = 'territory';
   const status = msg => { if ($('netStatus')) $('netStatus').textContent = msg; };
   const showRoom = data => {
-    room = data; $('onlineRoomInfo').classList.remove('hidden');
+    room = data;
+    if (data.mode) selectedMode = data.mode;
+    $('onlineRoomInfo').classList.remove('hidden');
     $('onlineRoomCodeLabel').textContent = data.code;
-    $('onlinePlayers').innerHTML = '';
-    (data.players || []).forEach((p,i) => {
-      const row = document.createElement('div');
-      row.className='flex justify-between rounded-md bg-white/5 px-2 py-1';
-      const left=document.createElement('span'); left.textContent=(i+1)+'. '+p.name+(p.host?' · HÔTE':'');
-      const right=document.createElement('span'); right.textContent='JOUEUR';
-      row.append(left,right); $('onlinePlayers').append(row);
-    });
+    $('onlinePlayers').replaceChildren();
+    const players = data.players || [];
+    for (let i=0; i<8; i++) {
+      const p = players[i];
+      const slot = document.createElement('div');
+      slot.className = 'aspect-square min-w-0 rounded-xl border-2 flex flex-col items-center justify-center text-center gap-1 p-1 ' +
+        (p ? 'border-emerald-300/70 bg-gradient-to-b from-emerald-500/30 to-emerald-900/60' :
+             'border-white/15 bg-slate-800/70');
+      const number = document.createElement('div');
+      number.className = 'w-8 h-8 rounded-full flex items-center justify-center text-sm font-black leading-none ' +
+        (p ? 'bg-emerald-400 text-slate-950' : 'bg-slate-600 text-white');
+      number.textContent = String(i+1);
+      const name = document.createElement('div');
+      name.className = 'w-full text-[9px] sm:text-[10px] font-bold text-white truncate text-center';
+      name.textContent = p ? p.name : 'Libre';
+      slot.append(number,name);
+      $('onlinePlayers').append(slot);
+    }
+    const target = data.mode === 'territory' ? 2 : data.mode === 'teambrawl' ? 9 : 8;
+    const missing = Math.max(0,target-players.length);
+    const capacity = data.mode === 'territory' ? 2 : 8;
     $('onlineBotFill').textContent = data.state==='playing'
-      ? `Bots ajoutés : ${Math.max(0,8-(data.players||[]).length)}`
-      : `Places libres : ${Math.max(0,8-(data.players||[]).length)} · Bots au lancement : ${Math.max(0,8-(data.players||[]).length)}`;
-    $('onlineStart').classList.toggle('hidden', !data.players?.some(p=>p.id===playerId&&p.host) || data.state!=='waiting');
+      ? `Bots ajoutés : ${missing}`
+      : `${players.length}/${capacity} joueur(s) · ${missing} bot(s) pour compléter ${target} combattants`;
+    $('onlineStart').classList.toggle('hidden', !players.some(p=>p.id===playerId&&p.host) || data.state!=='waiting');
     $('onlineCreate').classList.add('hidden');
+    $('onlineJoin').disabled = data.state !== 'waiting' || players.length >= 8;
+    $('onlineJoin').classList.toggle('opacity-40', $('onlineJoin').disabled);
   };
   const connect = () => new Promise((resolve,reject) => {
     if (socket && socket.readyState===WebSocket.OPEN) return resolve();
     if (socket) try{socket.close()}catch(_){}
-    if (GRIDPULSE_LOBBY_SERVER.includes('TON-SERVEUR')) return reject(new Error('Configure d’abord l’URL Render dans GRIDPULSE_LOBBY_SERVER.'));
     socket = new WebSocket(GRIDPULSE_LOBBY_SERVER);
     socket.onopen=resolve;
     socket.onerror=()=>reject(new Error('Serveur inaccessible. Vérifie l’URL Render.'));
@@ -11009,9 +11037,29 @@ button:not(:disabled){transition:filter .18s ease,transform .18s ease,box-shadow
       if(m.t==='error')status(m.message);
       if(m.t==='game_start'){
         showRoom(m.room);
-        status(`Partie lancée : ${m.humanCount} humain(s) et ${m.botCount} bot(s).`);
-        // Lancement du moteur local : la synchronisation multi-humains du moteur reste à finaliser.
+        selectedMode = m.mode || m.room?.mode || selectedMode;
+        const humanCount = Math.max(1, Number(m.humanCount)||1);
+        const botCount = Math.max(0, Number(m.botCount)||0);
+        status(`Partie lancée : ${humanCount} joueur(s), ${botCount} bot(s) de remplissage.`);
         $('netModal').classList.add('hidden');
+        // Configure les règles solo correspondantes avant de lancer le moteur.
+        if (typeof state !== 'undefined' && typeof profile !== 'undefined') {
+          state.campaignActive = false;
+          state.customMode = false;
+          if (selectedMode === 'battleroyale') {
+            state.gameMode = 'battleroyale';
+            profile.brBotsCount = 7; // 8 combattants au total dans l'arène BR
+          } else if (selectedMode === 'teambrawl') {
+            state.gameMode = 'territory';
+            state.numTeams = 3; // règles solo : 3 équipes de 3 combattants
+            state.customUnitsPerTeam = 3;
+          } else {
+            state.gameMode = 'territory';
+            state.numTeams = 2; // 1 joueur contre 1 adversaire
+            state.customUnitsPerTeam = 1;
+          }
+          if (typeof saveProfile === 'function') saveProfile();
+        }
         if(typeof startGame==='function') startGame();
       }
       if(m.t==='game_state' && window.gridPulseApplyNetworkState) window.gridPulseApplyNetworkState(m.state);
@@ -11020,12 +11068,16 @@ button:not(:disabled){transition:filter .18s ease,transform .18s ease,box-shadow
     socket.onclose=()=>status('Connexion au serveur fermée.');
   });
   const send = data => { if(socket&&socket.readyState===WebSocket.OPEN)socket.send(JSON.stringify(data)); };
-  $('onlineCreate')?.addEventListener('click',async()=>{
-    try{await connect();send({t:'create',name:window.profile?.playerName||'Hôte',mode:selectedMode});}
-    catch(e){status(e.message);}
-  });
+  const createOnlineRoom = async () => {
+    $('onlineRoomInfo').classList.add('hidden');
+    $('onlineCreate').disabled = true;
+    try { await connect(); send({t:'create',name:'Hôte',mode:selectedMode}); }
+    catch(e) { status(e.message); $('onlineCreate').disabled = false; }
+  };
+  window.gridPulseOnlineCreate = createOnlineRoom;
+  $('onlineCreate')?.addEventListener('click', createOnlineRoom);
   $('onlineJoin')?.addEventListener('click',async()=>{
-    try{await connect();send({t:'join',code:$('onlineRoomCode').value.trim().toUpperCase(),name:window.profile?.playerName||'Pilote'});}
+    try{await connect();send({t:'join',code:$('onlineRoomCode').value.trim().toUpperCase(),name:document.querySelector('#playerName')?.value||'Pilote'});}
     catch(e){status(e.message);}
   });
   $('onlineStart')?.addEventListener('click',()=>send({t:'start'}));
@@ -11104,4 +11156,13 @@ button:not(:disabled){transition:filter .18s ease,transform .18s ease,box-shadow
   #hangarScreen #openSettingsBtn{width:46px!important;height:46px!important}
 }
 
+</style>
+
+<style>
+#netModal>div{margin-inline:auto;text-align:center}
+#onlineRoomCode{text-align:center;letter-spacing:.25em}
+#onlineRoomCodeLabel{display:block;text-align:center;line-height:1.25}
+#onlinePlayers{align-items:stretch;justify-items:stretch}
+#onlinePlayers>div{display:flex;align-items:center;justify-content:center;text-align:center;min-width:0}
+#onlinePlayers>div>div:last-child{max-width:100%;text-align:center}
 </style>

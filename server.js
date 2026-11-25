@@ -4,6 +4,12 @@ const crypto = require('crypto');
 
 const PORT = process.env.PORT || 10000;
 const MAX_PLAYERS = 8;
+const MODE_RULES = {
+  territory: { targetUnits: 2, maxHumans: 2 },
+  battleroyale: { targetUnits: 8, maxHumans: 8 },
+  teambrawl: { targetUnits: 9, maxHumans: 8 }
+};
+function rulesFor(mode) { return MODE_RULES[mode] || MODE_RULES.territory; }
 const rooms = new Map();
 const clients = new Map();
 
@@ -22,7 +28,7 @@ function roomInfo(room) {
     code: room.code, hostId: room.hostId, state: room.state,
     mode: room.mode, maxPlayers: MAX_PLAYERS,
     players: [...room.players.values()].map(p => ({id:p.id,name:p.name,host:p.id===room.hostId})),
-    botCount: room.state === 'playing' ? Math.max(0, MAX_PLAYERS-room.players.size) : 0
+    botCount: room.state === 'playing' ? Math.max(0, (room.targetUnits || rulesFor(room.mode).targetUnits)-room.players.size) : 0
   };
 }
 function broadcast(room, data) {
@@ -62,7 +68,10 @@ wss.on('connection', ws => {
       const room = rooms.get(String(m.code||'').toUpperCase());
       if (!room) return send(ws,{t:'error',message:'Salon introuvable'});
       if (room.state !== 'waiting') return send(ws,{t:'error',message:'La partie a déjà commencé'});
-      if (room.players.size >= MAX_PLAYERS) return send(ws,{t:'error',message:'Salon complet (8 joueurs maximum)'});
+      const limits = rulesFor(room.mode);
+      if (room.players.size >= Math.min(MAX_PLAYERS, limits.maxHumans)) {
+        return send(ws,{t:'error',message: room.mode === 'territory' ? 'Le mode 1v1 accepte 2 joueurs maximum.' : 'Salon complet pour ce mode.'});
+      }
       const id = crypto.randomUUID();
       room.players.set(id,{id,name:String(m.name||'Pilote').replace(/[<>]/g,'').slice(0,16),ws,host:false});
       clients.set(ws,{code:room.code,id});
@@ -74,8 +83,14 @@ wss.on('connection', ws => {
       if (info.id !== room.hostId) return send(ws,{t:'error',message:'Seul l’hôte peut lancer la partie'});
       if (room.state !== 'waiting') return;
       room.state = 'playing';
-      room.botCount = Math.max(0, MAX_PLAYERS-room.players.size);
-      const start = {t:'game_start',room:roomInfo(room),humanCount:room.players.size,botCount:room.botCount,mode:room.mode};
+      const rules = rulesFor(room.mode);
+      room.targetUnits = rules.targetUnits;
+      room.botCount = Math.max(0, rules.targetUnits-room.players.size);
+      const start = {
+        t:'game_start', room:roomInfo(room), humanCount:room.players.size,
+        botCount:room.botCount, targetUnits:rules.targetUnits, mode:room.mode,
+        players:[...room.players.values()].map(p=>({id:p.id,name:p.name,host:p.id===room.hostId}))
+      };
       broadcast(room,start); publish(room); return;
     }
     // Relais pour le futur moteur de combat autoritaire : input -> hôte, état -> tous les clients.
