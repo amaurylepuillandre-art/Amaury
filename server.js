@@ -15,7 +15,13 @@ const wss = new WebSocketServer({
 
 const PORT = process.env.PORT || 10000;
 const ROOMS = new Map();
-const ROOM_CAPACITY = 8;
+const ROOM_CAPACITY = 8; // plafond général, affiné par mode ci-dessous
+const MODE_CAPACITIES = {
+  territory: 2,       // 1v1 : deux humains
+  teambrawl: 8,       // 3 équipes de 3 : jusqu'à 8 humains + 1 bot
+  battleroyale: 8,    // jusqu'à 8 humains
+  boost: 6            // six combattants au total
+};
 const ROOM_TTL_MS = 30 * 60 * 1000;
 
 const MODE_TARGETS = {
@@ -30,6 +36,9 @@ function safeName(value) {
 }
 function safeMode(value) {
   return Object.hasOwn(MODE_TARGETS, value) ? value : "territory";
+}
+function safeClientKey(value) {
+  return String(value || "").replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 100);
 }
 function makeCode() {
   const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
@@ -47,6 +56,8 @@ function publicRoom(room) {
     code: room.code,
     mode: room.mode,
     state: room.state,
+    capacity: MODE_CAPACITIES[room.mode] || ROOM_CAPACITY,
+    target: MODE_TARGETS[room.mode] || 2,
     hostId: room.hostId,
     players: [...room.players.values()].map(p => ({
       id: p.id, name: p.name, host: p.id === room.hostId
@@ -93,7 +104,7 @@ function createRoom(ws, msg) {
     players: new Map(),
     lastActivity: Date.now()
   };
-  room.players.set(id, { id, name: safeName(msg.name || "Hôte"), ws });
+  room.players.set(id, { id, name: safeName(msg.name || "Hôte"), clientKey: safeClientKey(msg.clientKey), ws });
   ROOMS.set(code, room);
   ws.playerId = id;
   ws.roomCode = code;
@@ -105,11 +116,18 @@ function joinRoom(ws, msg) {
   const room = ROOMS.get(code);
   if (!room) return error(ws, "Salon introuvable. Vérifie le code.");
   if (room.state !== "waiting") return error(ws, "Cette partie a déjà commencé.");
-  if (room.players.size >= ROOM_CAPACITY) return error(ws, "Ce salon est complet (8 joueurs maximum).");
+  const capacity = MODE_CAPACITIES[room.mode] || ROOM_CAPACITY;
+  if (room.players.size >= capacity) {
+    return error(ws, `Ce salon est complet (${capacity} joueur(s) maximum pour ce mode).`);
+  }
 
-  // Une connexion WebSocket ne peut occuper qu'une seule place dans un salon.
+  // Empêche le même navigateur/installation de réserver plusieurs places dans le salon.
+  const clientKey = safeClientKey(msg.clientKey);
+  if (clientKey && [...room.players.values()].some(p => p.clientKey === clientKey)) {
+    return error(ws, "Ce personnage est déjà présent dans ce salon.");
+  }
   const id = crypto.randomUUID();
-  room.players.set(id, { id, name: safeName(msg.name), ws });
+  room.players.set(id, { id, name: safeName(msg.name), clientKey, ws });
   room.lastActivity = Date.now();
   ws.playerId = id;
   ws.roomCode = code;
