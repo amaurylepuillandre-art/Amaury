@@ -4420,6 +4420,23 @@ const BR_MAPS = [
         let profile = loadProfile();
         profile.stats = normalizeStats(profile.stats);
 
+        // Réinitialisation unique des statistiques globales de GridPulse.
+        // La progression, les skins, les armes débloquées, les crédits et les réglages sont conservés.
+        const GRIDPULSE_STATS_RESET_VERSION = 'stats-reset-2026-11-26-v1';
+        try {
+            if (localStorage.getItem('gridpulse_stats_reset_version') !== GRIDPULSE_STATS_RESET_VERSION) {
+                profile.stats = normalizeStats({});
+                profile.rankedElo = 1000;
+                profile.rankedWins = 0;
+                profile.rankedLosses = 0;
+                profile.rankedStreak = 0;
+                profile.rankedBestElo = 1000;
+                profile.winStreak = 0;
+                localStorage.setItem('gridpulse_stats_reset_version', GRIDPULSE_STATS_RESET_VERSION);
+                localStorage.setItem(SAVE_KEY, JSON.stringify(profile));
+            }
+        } catch (_) {}
+
         function saveProfile() {
             try {
                 localStorage.setItem(SAVE_KEY, JSON.stringify(profile));
@@ -8549,12 +8566,61 @@ function startGame() {
                 });
             }
 
-            // Arène Boosts : à 6, un point de départ peut tomber dans un bâtiment ; on le déplace à côté.
-            if (state.gameMode === 'boost') {
-                state.units.forEach(u => {
-                    const spot = findFreeSpot(u.x / WORLD_WIDTH, u.y / WORLD_HEIGHT, 30);
-                    u.x = u.spawnX = spot.x;
-                    u.y = u.spawnY = spot.y;
+            // Sécurise TOUS les points d'apparition après le chargement des bâtiments.
+            // Les coordonnées de départ sont calculées avant les obstacles : sans ce contrôle,
+            // un combattant peut apparaître dans un bâtiment et être repoussé seulement après.
+            {
+                const placedSpawns = [];
+                const commanders = state.units.filter(u => !u.isDrone);
+                const spawnIsFree = (x, y, margin, unit) => {
+                    if (isSpotBlocked(x, y, margin)) return false;
+                    for (const base of state.bases) {
+                        if (!base.dead && Math.hypot(x - base.x, y - base.y) < base.radius + margin + 6) return false;
+                    }
+                    for (const other of placedSpawns) {
+                        const minGap = margin + other.margin + 10;
+                        if (Math.hypot(x - other.x, y - other.y) < minGap) return false;
+                    }
+                    return true;
+                };
+                commanders.forEach(unit => {
+                    const margin = (unit.radius || 19) + 12;
+                    const ox = unit.x, oy = unit.y;
+                    let chosen = null;
+                    if (spawnIsFree(ox, oy, margin, unit)) chosen = { x: ox, y: oy };
+                    // Recherche en spirale autour du spawn initial, puis sur toute la carte.
+                    if (!chosen) {
+                        for (let ring = 0; ring < 22 && !chosen; ring++) {
+                            const dist = 28 + ring * 28;
+                            for (let a = 0; a < 24; a++) {
+                                const ang = (a / 24) * Math.PI * 2 + ring * 0.19;
+                                const x = ox + Math.cos(ang) * dist;
+                                const y = oy + Math.sin(ang) * dist;
+                                if (spawnIsFree(x, y, margin, unit)) { chosen = { x, y }; break; }
+                            }
+                        }
+                    }
+                    if (!chosen) {
+                        for (let y = 0.12; y <= 0.90 && !chosen; y += 0.055) {
+                            for (let x = 0.12; x <= 0.90; x += 0.055) {
+                                const px = WORLD_WIDTH * x, py = WORLD_HEIGHT * y;
+                                if (spawnIsFree(px, py, margin, unit)) { chosen = { x: px, y: py }; break; }
+                            }
+                        }
+                    }
+                    if (!chosen) chosen = findFreeSpot(0.5, 0.5, margin);
+                    unit.x = unit.spawnX = chosen.x;
+                    unit.y = unit.spawnY = chosen.y;
+                    unit.angle = Math.atan2(WORLD_HEIGHT / 2 - unit.y, WORLD_WIDTH / 2 - unit.x);
+                    placedSpawns.push({ x: chosen.x, y: chosen.y, margin });
+                });
+                // Les drones suivent leur propriétaire, mais ne doivent pas naître dans un mur.
+                state.units.filter(u => u.isDrone).forEach(drone => {
+                    const owner = state.units.find(u => u.id === drone.ownerId);
+                    if (!owner) return;
+                    const spot = findFreeSpot(owner.x / WORLD_WIDTH, owner.y / WORLD_HEIGHT, (drone.radius || 12) + 8);
+                    drone.x = drone.spawnX = spot.x;
+                    drone.y = drone.spawnY = spot.y;
                 });
             }
 
@@ -8855,18 +8921,21 @@ function startGame() {
 
             // Battle Royale : fin si joueur mort ou dernier vivant
             if (state.gameMode === 'battleroyale' && !victim.isDrone) {
-                // Règles BR strictes :
-                // - joueur mort => DÉFAITE
-                // - plus qu'un seul vivant (et c'est le joueur) => VICTOIRE
                 const playerUnit = state.units.find(u => u.isPlayer);
                 const aliveCommanders = state.units.filter(u => !u.isDrone && !u.dead);
-                if (playerUnit && playerUnit.dead) {
+                if (net.role === 'host' && net.remote) {
+                    // L'hôte éliminé quitte son combat et voit son score, mais garde la
+                    // simulation serveur active pour que les autres joueurs terminent la manche.
+                    if (victim.isPlayer) netShowEliminated();
+                    if (aliveCommanders.length <= 1) startFinaleCinematic(aliveCommanders[0] || null, killer);
+                } else if (net.role === 'guest' && net.myId) {
+                    // L'invité attend le résultat envoyé par l'hôte.
+                } else if (playerUnit && playerUnit.dead) {
                     startFinaleCinematic(null, killer);
                 } else if (aliveCommanders.length === 1 && playerUnit && !playerUnit.dead && aliveCommanders[0].isPlayer) {
                     try { triggerEmote(playerUnit, 'hype', { text: 'GG', force: true }); } catch (_) {}
                     startFinaleCinematic(playerUnit, killer);
                 } else if (aliveCommanders.length <= 1 && playerUnit && !playerUnit.dead) {
-                    // Sécurité : un seul survivant non-joueur improbable, sinon joueur
                     startFinaleCinematic(aliveCommanders[0] || playerUnit, killer);
                 }
             }
@@ -12072,7 +12141,13 @@ function startGame() {
                 const playerUnit = state.units.find(u => u.isPlayer);
                 const aliveList = state.units.filter(u => !u.isDrone && !u.dead);
                 if (state.phase === 'PLAYING') {
-                    if (playerUnit && playerUnit.dead) startFinaleCinematic(null, null);
+                    if (net.role === 'host' && net.remote) {
+                        // En ligne, on laisse les bots et les deux humains continuer :
+                        // le match se termine uniquement lorsqu'il ne reste qu'un survivant.
+                        if (aliveList.length <= 1) startFinaleCinematic(aliveList[0] || null, null);
+                    } else if (net.role === 'guest' && net.myId) {
+                        // Le résultat est décidé par l'hôte ; ne pas terminer localement à la mort.
+                    } else if (playerUnit && playerUnit.dead) startFinaleCinematic(null, null);
                     else if (playerUnit && !playerUnit.dead && aliveList.length === 1 && aliveList[0].isPlayer) startFinaleCinematic(playerUnit, null);
                 }
                 const alive = aliveList.length;
@@ -12192,8 +12267,13 @@ function startGame() {
         function startFinaleCinematic(winnerUnit, lastAttacker) {
             if (state.phase === 'CINEMATIC' || state.phase === 'ENDED') return;
             if (net.role === 'host' && net.remote) {
-                const left = state.bases.filter(b => !b.dead);
-                netFinish(state.gameMode === 'boost' ? boostWinnerTeam() : (left.length === 1 ? left[0].teamId : -1));
+                if (state.gameMode === 'battleroyale') {
+                    const survivor = winnerUnit || state.units.find(u => !u.isDrone && !u.dead);
+                    netFinish(survivor ? survivor.teamId : -1);
+                } else {
+                    const left = state.bases.filter(b => !b.dead);
+                    netFinish(state.gameMode === 'boost' ? boostWinnerTeam() : (left.length === 1 ? left[0].teamId : -1));
+                }
                 return;
             }
             const player = state.units.find(u => u.isPlayer);
@@ -12894,7 +12974,7 @@ function startGame() {
         // =========================================================================
         // MULTIJOUEUR LOCAL 1v1 : LE TÉLÉPHONE HÔTE FAIT LE SERVEUR (WebRTC)
         // =========================================================================
-        const net = { role: null, pc: null, ch: null, guest: null, remote: null, over: false, acc: 0, sentGrid: null, lastRx: 0, selectedMode: 'territory' };
+        const net = { role: null, pc: null, ch: null, guest: null, remote: null, over: false, eliminated: false, acc: 0, sentGrid: null, lastRx: 0, selectedMode: 'territory' };
         const $n = id => document.getElementById(id);
         const netStatus = msg => { $n('netStatus').textContent = msg; };
         const netSend = obj => { if (net.ch && net.ch.readyState === 'open') net.ch.send(JSON.stringify(obj)); };
@@ -13143,12 +13223,30 @@ function startGame() {
         function netShowEnd(winnerTeam) {
             net.over = true;
             const mine = winnerTeam === profile.selectedTeamId;
-            netOverlay(winnerTeam < 0 ? 'ÉGALITÉ' : mine ? 'VICTOIRE !' : 'DÉFAITE', state.gameMode === 'boost' ? 'Arène Boosts terminée' : 'Duel local terminé');
+            if (net.eliminated) {
+                netOverlay('PARTIE TERMINÉE', `Ton score final : ${net.eliminationKills || 0} élimination(s) · Classement : #${net.eliminationRank || 1}.`);
+            } else {
+                netOverlay(winnerTeam < 0 ? 'ÉGALITÉ' : mine ? 'VICTOIRE !' : 'DÉFAITE', state.gameMode === 'boost' ? 'Arène Boosts terminée' : 'Partie terminée');
+            }
         }
         function netOverlay(title, text) {
             $n('netEndTitle').textContent = title;
             $n('netEndText').textContent = text;
             $n('netEnd').classList.remove('hidden');
+        }
+        function netShowEliminated() {
+            if (net.eliminated) return;
+            net.eliminated = true;
+            const me = state.units.find(u => u.isPlayer);
+            const kills = Math.max(Number(state.stats.playerKills || 0), Number(me && me.kills || 0));
+            const alive = state.units.filter(u => !u.isDrone && !u.dead).length;
+            const total = state.units.filter(u => !u.isDrone).length;
+            const rank = Math.min(total || 1, Math.max(1, alive + 1));
+            net.eliminationKills = kills;
+            net.eliminationRank = rank;
+            netOverlay('ÉLIMINÉ', `Score : ${kills} élimination(s) · Classement : #${rank}. Ta partie est terminée.`);
+            const back = $n('netBack');
+            if (back) back.textContent = 'RETOUR AU MENU';
         }
 
         function netHostTick(dt) {
@@ -13207,6 +13305,14 @@ function startGame() {
                 if (o && Math.hypot(n.x - o.x, n.y - o.y) < 150) { n.x = o.x; n.y = o.y; }
                 return n;
             });
+            const localUnit = state.units.find(u => u.isPlayer);
+            if (localUnit) {
+                state.stats.playerKills = Number(localUnit.kills || 0);
+                if (localUnit.dead && state.gameMode === 'battleroyale') {
+                    state.stats.playerDeaths = Math.max(1, Number(state.stats.playerDeaths || 0));
+                    netShowEliminated();
+                }
+            }
             for (let i = 0; i < m.grid.length; i += 2) state.grid[m.grid[i]] = m.grid[i + 1];
             if (m.grid.length) state.territoryCacheCanvas = null;
             state.boostPickups = m.pickups || []; if (m.tk) state.teamKills = m.tk;
@@ -13245,7 +13351,7 @@ function startGame() {
             return { t: 'in', a, mx, my, f: !!(input.mouseDown || input.touchFire || (aimStick.active && aimStick.magnitude > 0.2)) };
         }
         function netGuestUpdate(dt) {
-            if (net.over) return;
+            if (net.over || net.eliminated) return;
             const k = Math.min(1, dt * 18);
             for (const u of state.units) { u.x += (u.tx - u.x) * k; u.y += (u.ty - u.y) * k; }
             for (const p of state.projectiles) { p.x += p.vx * dt; p.y += p.vy * dt; }
@@ -13333,9 +13439,10 @@ function startGame() {
                 if (net.role !== 'guest' || !m || net.over) return;
                 net.lastRx = performance.now();
                 if (m.t === 'init') {
-                    const you = m.assign[myOnlineId];
-                    if (!you) { netOverlay('PARTIE COMPLÈTE', 'Les 6 places sont prises.'); net.over = true; return; }
-                    // L'arène est limitée à 6 : l'hôte envoie les identifiants d'équipe.
+                    // Render utilise un identifiant d'unité direct (you) ; l'ancien mode Boost
+                    // conserve son tableau d'affectation (assign).
+                    const you = m.you || m.assign?.[window.gridPulseOnlineId || myOnlineId];
+                    if (!you) { netOverlay('PARTIE IMPOSSIBLE', 'Aucun combattant ne t’a été attribué.'); net.over = true; return; }
                     guestInit(Object.assign(m, { you }));
                 } else if (m.t === 's') guestSnapshot(m);
                 else if (m.t === 'end') netShowEnd(m.winner);
@@ -13344,6 +13451,130 @@ function startGame() {
             window.gridPulseReceiveNetworkInput = (id, input) => {
                 const u = net.role === 'host' && remotes.get(String(id));
                 if (u && input && input.t === 'in') { u.netInput = input; u.netRx = performance.now(); }
+            };
+
+            // Intégration Render pour les modes classiques, dont Battle Royale.
+            // L'hôte conserve la simulation complète ; les invités appliquent ses snapshots.
+            let renderWatchdog = null;
+            window.gridPulseStartOnline = ({ players, playerId, socket, mode }) => {
+                const isHost = (players || []).some(p => p.id === playerId && p.host);
+                const onlinePlayers = players || [];
+                const remotePlayers = onlinePlayers.filter(p => p.id !== playerId);
+                if (!remotePlayers.length) {
+                    if (!isHost) {
+                        netOverlay('PARTIE IMPOSSIBLE', 'Aucun autre joueur n’est présent dans ce salon.');
+                        return true;
+                    }
+                    // Le salon peut démarrer seul : les combattants manquants restent des bots.
+                    net.role = null; net.remote = null; net.ch = null; net.over = false; net.eliminated = false;
+                    state.campaignActive = false; state.customMode = false;
+                    if (mode === 'battleroyale') { state.gameMode = 'battleroyale'; profile.brBotsCount = 7; }
+                    else if (mode === 'teambrawl') { state.gameMode = 'territory'; state.numTeams = 3; }
+                    else { state.gameMode = 'territory'; state.numTeams = 2; }
+                    state.customUnitsPerTeam = 1;
+                    startGame();
+                    return true;
+                }
+
+                window.gridPulseOnlineId = playerId;
+                net.over = false; net.eliminated = false; net.acc = 0; net.sentGrid = null; net.myId = null;
+                net.remote = null; net.guest = null; remotes = new Map();
+                net.role = isHost ? 'host' : 'guest';
+                net.ch = {
+                    get readyState() { return socket.readyState === WebSocket.OPEN ? 'open' : 'closed'; },
+                    get bufferedAmount() { return socket.bufferedAmount || 0; },
+                    send(raw) {
+                        if (socket.readyState !== WebSocket.OPEN) return;
+                        let packet; try { packet = JSON.parse(raw); } catch (_) { return; }
+                        if (isHost) {
+                            if (packet.t === 'init' || packet.t === 's' || packet.t === 'end') {
+                                socket.send(JSON.stringify({ t: 'game_state', state: packet }));
+                            }
+                        } else if (packet.t === 'in') {
+                            socket.send(JSON.stringify({ t: 'player_input', input: packet }));
+                        }
+                    }
+                };
+                socket.addEventListener('close', () => netLost('Connexion au serveur Render perdue.'));
+                $n('netModal').classList.add('hidden');
+                $n('combatModal')?.classList.add('hidden');
+                clearInterval(renderWatchdog);
+
+                if (!isHost) {
+                    net.role = 'guest';
+                    net.lastRx = performance.now();
+                    renderWatchdog = setInterval(() => {
+                        if (net.over) { clearInterval(renderWatchdog); return; }
+                        if (performance.now() - net.lastRx > 10000) {
+                            netOverlay('PARTIE INTERROMPUE', 'La connexion avec l’hôte ne répond plus.');
+                            net.over = true;
+                        }
+                    }, 1000);
+                    return true;
+                }
+
+                const keepDrones = profile.miniBotsEnabled;
+                profile.miniBotsEnabled = false;
+                state.campaignActive = false; state.customMode = false;
+                if (mode === 'battleroyale') {
+                    state.gameMode = 'battleroyale';
+                    // Huit places de combattants : les joueurs connectés remplacent les bots.
+                    state.numTeams = Math.min(FACTIONS.length, 8);
+                    profile.brBotsCount = 7;
+                } else if (mode === 'teambrawl') {
+                    state.gameMode = 'territory'; state.numTeams = 3;
+                } else {
+                    state.gameMode = 'territory'; state.numTeams = 2;
+                }
+                state.customUnitsPerTeam = 1;
+                try { startGame(); } finally { profile.miniBotsEnabled = keepDrones; }
+
+                const me = state.units.find(u => u.isPlayer);
+                // Les invités remplacent tous les bots commandants, y compris les deux
+                // alliés du joueur hôte en Team Brawl. Cela permet bien 3 équipes de 3.
+                const availableUnits = state.units.filter(u => !u.isPlayer && !u.isDrone);
+                if (!me || !availableUnits.length) {
+                    netOverlay('ERREUR DE PARTIE', 'Impossible de préparer les combattants en ligne.');
+                    net.over = true;
+                    return true;
+                }
+                const assign = {};
+                remotePlayers.forEach((remotePlayer, index) => {
+                    const unit = availableUnits[index];
+                    if (!unit) return;
+                    Object.assign(unit, {
+                        remote: true, netInput: null, name: cleanName(remotePlayer.name),
+                        hp: me.maxHp, maxHp: me.maxHp, atkMult: me.atkMult, moveSpeed: me.moveSpeed
+                    });
+                    remotes.set(String(remotePlayer.id), unit);
+                    assign[remotePlayer.id] = unit.id;
+                });
+                net.remote = remotes.values().next().value || null;
+                if (!net.remote || remotes.size !== remotePlayers.length) {
+                    netOverlay('SALON TROP REMPLI', 'Impossible d’attribuer un combattant à chaque joueur. Vérifie le nombre de places du mode.');
+                    net.over = true;
+                    return true;
+                }
+                net.sentGrid = Array.from(state.grid);
+                netSend({
+                    t: 'init', cols: ARENA_CONFIG.cols, rows: ARENA_CONFIG.rows, assign,
+                    teams: state.activeTeams.map(t => t.id), numTeams: state.numTeams, gameMode: state.gameMode,
+                    obstacles: state.obstacles, mapName: state.activeMapName, mapId: state.selectedMapId,
+                    grid: net.sentGrid, units: state.units.map(netUnitData), bases: state.bases,
+                    orbs: state.healthOrbs, zone: state.zone, chests: state.chests, gems: state.gems
+                });
+                return true;
+            };
+
+            window.gridPulseOnlineRoster = players => {
+                if (net.role !== 'host' || !net.remote) return;
+                const present = new Set((players || []).map(p => String(p.id)));
+                for (const [id, unit] of remotes) {
+                    if (!present.has(id)) {
+                        unit.remote = false; unit.netInput = null; remotes.delete(id);
+                    }
+                }
+                net.remote = remotes.values().next().value || null;
             };
 
             // Un joueur quitte la partie : un bot reprend sa place.
@@ -13855,11 +14086,20 @@ function startGame() {
   const GRIDPULSE_LOBBY_SERVER = 'wss://amaury-2pvx.onrender.com/ws';
   const $ = id => document.getElementById(id);
   let socket = null, room = null, playerId = null, selectedMode = 'territory';
+  const getClientKey = () => {
+    try {
+      let key = localStorage.getItem('gridpulse_client_key');
+      if (!key) { key = (crypto.randomUUID ? crypto.randomUUID() : 'gp-' + Math.random().toString(36).slice(2) + Date.now()); localStorage.setItem('gridpulse_client_key', key); }
+      return key;
+    } catch (_) { return 'gp-' + Math.random().toString(36).slice(2) + Date.now(); }
+  };
+  const clientKey = getClientKey();
   const status = msg => { if ($('netStatus')) $('netStatus').textContent = msg; };
   const showRoom = data => {
     room = data;
     if (data.mode) selectedMode = data.mode;
     window.gridPulseBoostRoster?.(data.players || []);
+    window.gridPulseOnlineRoster?.(data.players || []);
     $('onlineRoomInfo').classList.remove('hidden');
     $('onlineRoomCodeLabel').textContent = data.code;
     $('onlinePlayers').replaceChildren();
@@ -13880,9 +14120,9 @@ function startGame() {
       slot.append(number,name);
       $('onlinePlayers').append(slot);
     }
-    const target = data.mode === 'territory' ? 2 : data.mode === 'teambrawl' ? 9 : data.mode === 'boost' ? 6 : 8;
+    const target = Number(data.target) || (data.mode === 'territory' ? 2 : data.mode === 'teambrawl' ? 9 : data.mode === 'boost' ? 6 : 8);
     const missing = Math.max(0,target-players.length);
-    const capacity = data.mode === 'territory' ? 2 : data.mode === 'boost' ? 6 : 8;
+    const capacity = Number(data.capacity) || (data.mode === 'territory' ? 2 : data.mode === 'boost' ? 6 : 8);
     $('onlineBotFill').textContent = data.state==='playing'
       ? `Bots ajoutés : ${missing}`
       : `${players.length}/${capacity} joueur(s) · ${missing} bot(s) pour compléter ${target} combattants`;
@@ -13908,30 +14148,26 @@ function startGame() {
         const humanCount = Math.max(1, Number(m.humanCount)||1);
         const botCount = Math.max(0, Number(m.botCount)||0);
         status(`Partie lancée : ${humanCount} joueur(s), ${botCount} bot(s) de remplissage.`);
+        $('netModal').classList.add('hidden');
         if (selectedMode === 'boost' && window.gridPulseBoostOnline) {
           window.gridPulseBoostOnline({ players: m.room?.players || [], playerId, socket });
           return;
         }
-        $('netModal').classList.add('hidden');
-        // Configure les règles solo correspondantes avant de lancer le moteur.
-        if (typeof state !== 'undefined' && typeof profile !== 'undefined') {
-          state.campaignActive = false;
-          state.customMode = false;
-          if (selectedMode === 'battleroyale') {
-            state.gameMode = 'battleroyale';
-            profile.brBotsCount = 7; // 8 combattants au total dans l'arène BR
-          } else if (selectedMode === 'teambrawl') {
-            state.gameMode = 'territory';
-            state.numTeams = 3; // règles solo : 3 équipes de 3 combattants
-            state.customUnitsPerTeam = 3;
-          } else {
-            state.gameMode = 'territory';
-            state.numTeams = 2; // 1 joueur contre 1 adversaire
-            state.customUnitsPerTeam = 1;
-          }
-          if (typeof saveProfile === 'function') saveProfile();
+        if (window.gridPulseStartOnline) {
+          const handled = window.gridPulseStartOnline({
+            players: m.room?.players || [], playerId, socket, mode: selectedMode
+          });
+          if (handled) return;
         }
-        if(typeof startGame==='function') startGame();
+        // Secours : uniquement si l'intégration réseau n'est pas chargée.
+        if (typeof state !== 'undefined' && typeof profile !== 'undefined') {
+          state.campaignActive = false; state.customMode = false;
+          state.gameMode = selectedMode === 'battleroyale' ? 'battleroyale' : 'territory';
+          if (selectedMode === 'battleroyale') profile.brBotsCount = 7;
+          else if (selectedMode === 'teambrawl') { state.numTeams = 3; state.customUnitsPerTeam = 3; }
+          else { state.numTeams = 2; state.customUnitsPerTeam = 1; }
+          if (typeof startGame === 'function') startGame();
+        }
       }
       if(m.t==='game_state' && window.gridPulseApplyNetworkState) window.gridPulseApplyNetworkState(m.state);
       if(m.t==='player_input' && window.gridPulseReceiveNetworkInput) window.gridPulseReceiveNetworkInput(m.playerId,m.input);
@@ -13942,13 +14178,13 @@ function startGame() {
   const createOnlineRoom = async () => {
     $('onlineRoomInfo').classList.add('hidden');
     $('onlineCreate').disabled = true;
-    try { await connect(); send({t:'create',name:'Hôte',mode:selectedMode}); }
+    try { await connect(); send({t:'create',name:document.querySelector('#playerName')?.value||'Hôte',mode:selectedMode,clientKey}); }
     catch(e) { status(e.message); $('onlineCreate').disabled = false; }
   };
   window.gridPulseOnlineCreate = createOnlineRoom;
   $('onlineCreate')?.addEventListener('click', createOnlineRoom);
   $('onlineJoin')?.addEventListener('click',async()=>{
-    try{await connect();send({t:'join',code:$('onlineRoomCode').value.trim().toUpperCase(),name:document.querySelector('#playerName')?.value||'Pilote'});}
+    try{await connect();send({t:'join',code:$('onlineRoomCode').value.trim().toUpperCase(),name:document.querySelector('#playerName')?.value||'Pilote',clientKey});}
     catch(e){status(e.message);}
   });
   $('onlineStart')?.addEventListener('click',()=>send({t:'start'}));
