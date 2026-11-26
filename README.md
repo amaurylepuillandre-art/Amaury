@@ -1,33 +1,39 @@
-# GridPulse — déploiement multijoueur Render
+# GridPulse — multijoueur Render
 
-## Contenu
-- `server/server.js` : serveur HTTP + WebSocket, salons, codes, limite de 8 connexions, départ de partie et relais réseau.
+## Fichiers
+- `GridPulse-56.html` : jeu raccordé au serveur Render.
+- `server/server.js` : création des salons, codes, attribution des combattants et relais WebSocket.
 - `server/package.json` : dépendances Node.js.
 - `render.yaml` : configuration Render Blueprint.
-- `GridPulse-56.html` : copie du jeu fourni.
 
-## Déploiement Render
-1. Décompresse cette archive.
-2. Dépose le dossier dans un dépôt GitHub (le fichier `render.yaml` doit être à la racine).
-3. Dans Render, choisis **New + → Blueprint** et connecte le dépôt.
-4. Render détecte `render.yaml` et crée le service `gridpulse-multiplayer`.
-5. Attends que le service soit `Live`.
-6. L'adresse WebSocket du jeu doit être `wss://NOM-DU-SERVICE.onrender.com/ws`.
-   Le fichier HTML fourni pointe déjà vers `wss://amaury-2pvx.onrender.com/ws`.
-   Si Render donne une autre adresse, remplace la constante `GRIDPULSE_LOBBY_SERVER` dans le HTML.
+## Modes multijoueurs pris en charge
+Les quatre modes proposés dans le menu multijoueur utilisent le même salon Render et une simulation autoritaire côté hôte :
 
-## Vérification
-- Ouvre `https://NOM-DU-SERVICE.onrender.com/health` : la réponse doit contenir `{"ok":true}`.
-- Ouvre le jeu dans deux navigateurs/appareils, crée un salon depuis l'un et rejoins-le avec le code depuis l'autre.
+- **1v1** (`territory`) : 2 joueurs humains maximum. Le joueur invité remplace le bot adverse.
+- **Team Brawl** (`teambrawl`) : 3 équipes de 3 combattants. Jusqu'à 8 joueurs humains et un bot pour compléter la neuvième place. Les invités peuvent remplacer aussi bien les bots alliés de l'hôte que les bots adverses.
+- **Battle Royale** (`battleroyale`) : jusqu'à 8 joueurs humains dans la même arène ; les bots complètent les places libres. L'hôte décide de la fin de partie.
+- **Arène Boosts** (`boost`) : jusqu'à 6 joueurs au total, conformément aux 6 combattants du mode.
 
-## Important — état réel de l'intégration du moteur
-Ce serveur fournit les salons, les codes, la limite de 8 joueurs, le remplissage annoncé par bots et le relais des messages `game_state` / `player_input`.
-Dans le HTML fourni, le mode **Boost** possède déjà un chemin de synchronisation réseau utilisant ces messages. Les modes **1v1, Team Brawl et Battle Royale** démarrent encore leur moteur localement après `game_start` : leur simulation complète partagée (unités, tirs, dégâts, morts et victoire) n'est pas encore raccordée au relais. Le serveur seul ne peut pas rendre ces modes réellement synchronisés ; il faut modifier le moteur du jeu pour qu'un hôte simule la partie et que les autres clients appliquent son état et lui envoient leurs commandes.
+Le serveur applique une capacité distincte par mode : 2 en 1v1, 8 en Team Brawl, 8 en Battle Royale et 6 en Arène Boosts. Il refuse les connexions supplémentaires au-delà de cette limite.
 
-Les bots sont des combattants générés par le moteur local de l'hôte pour les modes qui les prennent en charge ; le serveur calcule seulement le nombre de places à compléter et le transmet au jeu. Le mode Team Brawl vise 9 combattants au total, avec 8 connexions humaines maximum et donc potentiellement un bot de remplissage.
+## Déployer sur Render
+1. Décompresse cette archive dans un dépôt GitHub : `render.yaml` doit être à la racine du dépôt.
+2. Dans Render, choisis **New + → Blueprint**, puis connecte le dépôt.
+3. Render lit `render.yaml` et crée le service `gridpulse-multiplayer`.
+4. Attends que le service soit `Live`.
+5. Le jeu utilise `wss://amaury-2pvx.onrender.com/ws`. Si Render fournit une autre adresse, modifie `GRIDPULSE_LOBBY_SERVER` dans `GridPulse-56.html`.
 
-## Limites de cette première version
-- Les salons sont conservés en mémoire : un redémarrage ou une mise en veille du service les efface.
-- Aucun compte utilisateur ni authentification persistante.
-- Une place correspond à une connexion WebSocket ; pour empêcher un même compte de rejoindre plusieurs fois avec plusieurs connexions, il faudra transmettre un identifiant de compte stable et le valider côté serveur.
-- Render peut mettre en veille certains services gratuits ; le premier réveil peut prendre un peu de temps.
+## Vérifier
+Ouvre `https://amaury-2pvx.onrender.com/health`. Le serveur doit répondre avec `ok: true`.
+Ouvre ensuite le même fichier HTML sur deux appareils : crée un salon sur le premier, rejoins-le avec le code sur le second, puis lance la partie depuis l'hôte. Pour vérifier Team Brawl et les modes à plus de deux joueurs, utilise plusieurs navigateurs/appareils.
+
+## Notes techniques et limites
+- L'hôte exécute la simulation ; les invités envoient leurs commandes et reçoivent les états synchronisés (unités, projectiles, dégâts, zone, objectifs et résultat).
+- Une clé locale persistante empêche le même navigateur/installation de réserver plusieurs places dans un salon. Ce n'est pas un compte utilisateur synchronisé entre appareils.
+- Les salons sont stockés en mémoire et disparaissent si Render redémarre ou met le service en veille.
+- Render peut mettre en veille les services gratuits ; le premier réveil peut prendre un peu de temps.
+- En Battle Royale, mourir met fin à la manche du joueur concerné : l'écran affiche ses éliminations et son classement. L'hôte continue à simuler la manche pour les autres joueurs.
+
+Les points de spawn sont maintenant contrôlés contre les bâtiments, les bases et les autres combattants.
+
+Les fichiers ont été vérifiés pour la syntaxe JavaScript. Le déploiement Render et les parties réelles à plusieurs appareils doivent encore être testés après publication ; le bon fonctionnement en production n'est donc pas garanti avant ce test.
